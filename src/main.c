@@ -31,6 +31,14 @@ static WINDOW *left_border_window,
               *menu_border_window,
               *menu_text_window;
 
+void SigWinch(int signo)
+{
+  struct winsize size;
+  ioctl(stdout, TIOCGWINSZ, (char *)&size);
+  resizeterm(size.ws_row, size.ws_col);
+  refresh();
+}
+
 void CreateWindows(void)
 {
   /*  Creating the windows */
@@ -67,9 +75,13 @@ void InitializeNcurses(void)
   signal(SIGWINCH, SigWinch);
   cbreak();
   noecho();
-  curs_set(1);
+  curs_set(0);
   keypad(stdscr, 1);
   refresh();
+  start_color();
+
+  init_pair(1, COLOR_BLACK, COLOR_WHITE);
+  init_pair(2, COLOR_WHITE, COLOR_BLACK);
 }
 
 void OpenActiveDir(const char *active_path, size_t size)
@@ -105,18 +117,72 @@ void Finalize(void)
   endwin();
 }
 
-void SigWinch(int signo)
+void ColorLine(int y, int color_num)
 {
-  struct winsize size;
-  ioctl(stdout, TIOCGWINSZ, (char *)&size);
-  resizeterm(size.ws_row, size.ws_col);
-  refresh();
+  char line[38];
+
+  mvwinnstr(active_window, y, 0, line, 38);
+  wmove(active_window, y, 0);
+  wclrtoeol(active_window);
+  wattron(active_window, COLOR_PAIR(color_num));
+  wprintw(active_window, "%s", line);
+  wattroff(active_window, COLOR_PAIR(color_num)); 
+  redrawwin(active_window);
+}
+
+void PickOutLine(int *y, int delta)
+{
+  ColorLine(*y, 2);
+  (*y) += delta;
+  ColorLine(*y, 1);
+}
+
+int ChangeCurrentDirectory(int active_line, char *active_path)
+{
+  char line[38];
+  char path[200];
+  struct stat file_info;
+
+  mvwinnstr(active_window, active_line, 0, line, 38);
+  for (int i = 36; i > -1; --i) {
+    if (line[i] != ' ') {
+      line[i + 1] = '\0';
+      break;
+    }
+  }
+  sprintf(path, "%s/%s", active_path, line);
+  if (stat(path, &file_info) == -1) {
+    /*  Can't get info about this file */
+    return -1;
+  }
+  if (S_ISDIR(file_info.st_mode)) {
+    if (chdir(path) == -1) {
+      return -1;
+    }
+    wclear(active_window);
+    getcwd(active_path, 100);
+    OpenActiveDir(active_path, 100);
+  } else {
+    return -1;
+  }
+
+  return 0;
+}
+
+void ChangeActiveWindow(void)
+{
+  if (active_window == left_dir_window)
+    active_window = right_dir_window;
+  else
+    active_window = left_dir_window;
 }
 
 int main(int argc, char **argv)
 {
   char active_path[100];
   int symbol;
+  int active_line = 0,
+      prev_line = 0;
   
   if (argc > 1) {
     strcpy(active_path, argv[1]);
@@ -127,11 +193,53 @@ int main(int argc, char **argv)
   CreateWindows();
   active_window = left_dir_window; 
   wmove(active_window, 0, 0);
-  OpenActiveDir(active_dir, 100);
+
+  OpenActiveDir(active_path, 100);
+  wrefresh(left_dir_window);
+  active_window = right_dir_window;
+  OpenActiveDir(active_path, 100);
+  wrefresh(right_dir_window);
+  active_window = left_dir_window;
+  
+  PickOutLine(&active_line, 1);
   while (1) {
     symbol = wgetch(active_window);
     if (symbol == 27)
       break;
+    switch (symbol) {
+      case KEY_UP:
+        if (active_line != 0) {
+          PickOutLine(&active_line, -1);
+        }
+        break;
+      case KEY_DOWN:
+        if (active_line != DIR_WINDOW_HEIGHT - 1) {
+          PickOutLine(&active_line, 1);
+        }
+        break;
+      case KEY_LEFT:
+        if (active_window == right_dir_window) {
+          ColorLine(active_line, 2);
+          ChangeActiveWindow();
+          ColorLine(active_line, 1);
+          wrefresh(right_dir_window);
+        }
+        break;
+      case KEY_RIGHT:
+        if (active_window == left_dir_window) {
+          ColorLine(active_line, 2);
+          ChangeActiveWindow();
+          ColorLine(active_line, 1);
+          wrefresh(left_dir_window);
+        }
+        break;
+      case '\n':
+        if (ChangeCurrentDirectory(active_line, active_path) == 0) {
+          active_line = 0;
+          ColorLine(active_line, 1);
+        }
+        break;
+    }
   }
  
   Finalize();
