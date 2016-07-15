@@ -12,6 +12,8 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
+#include <dirent.h>
+
 #define BORDER_WINDOW_HEIGHT 21
 #define BORDER_WINDOW_WIDTH 40
 #define DIR_WINDOW_HEIGHT 19
@@ -70,6 +72,28 @@ void InitializeNcurses(void)
   refresh();
 }
 
+void OpenActiveDir(const char *active_path, size_t size)
+{
+  DIR *dir;
+
+  dir = opendir(active_path);
+  if (dir == NULL) {
+    /*  Some errors occur */
+  } else {
+    struct dirent *current_file = NULL;
+    int current_y = 0;
+    
+    while ((current_file = readdir(dir)) != NULL) {
+      if (current_file->d_name[0] == '.' &&
+          current_file->d_name[1] != '.')
+        continue;
+
+      mvwprintw(active_window, current_y++, 0, "%s", current_file->d_name);
+    }
+    closedir(dir);
+  }
+}
+
 void Finalize(void)
 {
   delwin(right_dir_window);
@@ -96,11 +120,14 @@ int main(int argc, char **argv)
   
   if (argc > 1) {
     strcpy(active_path, argv[1]);
+  } else {
+    getcwd(active_path, 100);
   }
   InitializeNcurses();
   CreateWindows();
   active_window = left_dir_window; 
   wmove(active_window, 0, 0);
+  OpenActiveDir(active_dir, 100);
   while (1) {
     symbol = wgetch(active_window);
     if (symbol == 27)
