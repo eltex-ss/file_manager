@@ -14,23 +14,46 @@
 
 #include <dirent.h>
 
-#define BORDER_WINDOW_HEIGHT 21
+/*  Constants */
+#define BORDER_WINDOW_HEIGHT 24
 #define BORDER_WINDOW_WIDTH 40
-#define DIR_WINDOW_HEIGHT 19
+#define DIR_WINDOW_HEIGHT 22
 #define DIR_WINDOW_WIDTH 38
 #define MENU_WINDOW_HEIGHT 1
 #define MENU_WINDOW_WIDTH 78
 #define MENU_BORDER_HEIGHT 3
 #define MENU_BORDER_WIDTH 80
+#define PATH_LENGTH 400
+#define HIGHLIGHTED_COLOR 1
+#define NON_HIGHLIGHTED_COLOR 2
 
+/*  My structs */
+/*  File manager window */
+struct FMWindow {
+  char    active_path[PATH_LENGTH]; /* path to active directory */
+  WINDOW *nwindow;
+};
+
+/* Struct represents file manager's active window */
+struct ActiveWindow {
+  int left;                /* if active winow is left, this = 1 else = 0*/
+  int current_line;        /* highlighted line */
+  int lines_count;         /* files count in this directory */
+  struct FMWindow *window; /* pointer to left or right FMWindow */
+};
+
+/*  Global variables */
+/*  Ncurses windows */
 static WINDOW *left_border_window,
               *left_dir_window,
               *right_border_window,
-              *right_dir_window,
-              *active_window,
-              *menu_border_window,
-              *menu_text_window;
+              *right_dir_window;
+/*  My windows */
+static struct FMWindow left_fmwindow,
+                       right_fmwindow;
+static struct ActiveWindow active_window;
 
+/*  Functions */
 void SigWinch(int signo)
 {
   struct winsize size;
@@ -39,6 +62,7 @@ void SigWinch(int signo)
   refresh();
 }
 
+/* Create ncurses windows and initialize FMWindows*/
 void CreateWindows(void)
 {
   /*  Creating the windows */
@@ -47,6 +71,7 @@ void CreateWindows(void)
                               0, 0);
   left_dir_window = derwin(left_border_window, DIR_WINDOW_HEIGHT,
                            DIR_WINDOW_WIDTH, 1, 1);
+  left_fmwindow.nwindow = left_dir_window;
   box(left_border_window, 0, 0);
   keypad(left_dir_window, 1);
   wrefresh(left_border_window);
@@ -56,17 +81,10 @@ void CreateWindows(void)
                                0, BORDER_WINDOW_WIDTH);
   right_dir_window = derwin(right_border_window, DIR_WINDOW_HEIGHT,
                             DIR_WINDOW_WIDTH, 1, 1);
+  right_fmwindow.nwindow = right_dir_window;
   keypad(right_dir_window, 1);
   box(right_border_window, 0, 0);
   wrefresh(right_border_window);
-
-  /*  Menu part */
-  menu_border_window = newwin(MENU_BORDER_HEIGHT, MENU_BORDER_WIDTH,
-                              BORDER_WINDOW_HEIGHT, 0);
-  menu_text_window = derwin(menu_border_window, MENU_WINDOW_HEIGHT,
-                            MENU_WINDOW_WIDTH, 1, 1);
-  box(menu_border_window, 0, 0);
-  wrefresh(menu_border_window);
 }
 
 void InitializeNcurses(void)
@@ -84,24 +102,39 @@ void InitializeNcurses(void)
   init_pair(2, COLOR_WHITE, COLOR_BLACK);
 }
 
-void OpenActiveDir(const char *active_path, size_t size)
+/* Just open the directory and print all files
+ * (working if files count < 23) */
+void OpenActiveDir(void)
 {
   DIR *dir;
 
-  dir = opendir(active_path);
+  dir = opendir(active_window.window->active_path);
   if (dir == NULL) {
     /*  Some errors occur */
   } else {
     struct dirent *current_file = NULL;
+    struct stat file_info;
+    char file_path[PATH_LENGTH];
     int current_y = 0;
+    char dir_prefix[2];
     
+    dir_prefix[1] = '\0';
     while ((current_file = readdir(dir)) != NULL) {
       if (current_file->d_name[0] == '.' &&
           current_file->d_name[1] != '.')
         continue;
 
-      mvwprintw(active_window, current_y++, 0, "%s", current_file->d_name);
+      sprintf(file_path, "%s/%s",active_window.window->active_path,
+             current_file->d_name);
+      stat(file_path, &file_info);
+      if (S_ISDIR(file_info.st_mode))
+        dir_prefix[0] = '/';
+      else
+        dir_prefix[0] = '\0';
+      mvwprintw(active_window.window->nwindow, current_y++, 0, "%s%s",
+                dir_prefix, current_file->d_name);
     }
+    active_window.lines_count = current_y;
     closedir(dir);
   }
 }
@@ -112,132 +145,147 @@ void Finalize(void)
   delwin(right_border_window);
   delwin(left_dir_window);
   delwin(left_border_window);
-  delwin(menu_text_window);
-  delwin(menu_border_window);
   endwin();
 }
 
-void ColorLine(int y, int color_num)
+/*  Hightlight the file with number color_num*/
+void ColorLine(int color_num)
 {
   char line[38];
+  int y = active_window.current_line;
 
-  mvwinnstr(active_window, y, 0, line, 38);
-  wmove(active_window, y, 0);
-  wclrtoeol(active_window);
-  wattron(active_window, COLOR_PAIR(color_num));
-  wprintw(active_window, "%s", line);
-  wattroff(active_window, COLOR_PAIR(color_num)); 
-  redrawwin(active_window);
+  mvwinnstr(active_window.window->nwindow, y, 0, line, 38);
+  wmove(active_window.window->nwindow, y, 0);
+  wclrtoeol(active_window.window->nwindow);
+  wattron(active_window.window->nwindow, COLOR_PAIR(color_num));
+  wprintw(active_window.window->nwindow, "%s", line);
+  wattroff(active_window.window->nwindow, COLOR_PAIR(color_num)); 
+  redrawwin(active_window.window->nwindow);
 }
 
-void PickOutLine(int *y, int delta)
+/*  Remove previous file highlighting and
+ *  highlight current file */
+void PickOutLine(int delta)
 {
-  ColorLine(*y, 2);
-  (*y) += delta;
-  ColorLine(*y, 1);
+  ColorLine(2);
+  active_window.current_line += delta;
+  ColorLine(1);
 }
 
-int ChangeCurrentDirectory(int active_line, char *active_path)
+/*  Change current directory if selected file is directory and
+ *  highlight the first file in directory */
+void ChangeCurrentDirectory(void)
 {
   char line[38];
-  char path[200];
+  char path[PATH_LENGTH];
   struct stat file_info;
+  int active_line = active_window.current_line;
 
-  mvwinnstr(active_window, active_line, 0, line, 38);
+  mvwinnstr(active_window.window->nwindow, active_line, 0, line, 38);
   for (int i = 36; i > -1; --i) {
     if (line[i] != ' ') {
       line[i + 1] = '\0';
       break;
     }
   }
-  sprintf(path, "%s/%s", active_path, line);
+  sprintf(path, "%s/%s", active_window.window->active_path, line);
   if (stat(path, &file_info) == -1) {
     /*  Can't get info about this file */
-    return -1;
+    return;
   }
   if (S_ISDIR(file_info.st_mode)) {
     if (chdir(path) == -1) {
-      return -1;
+      return;
     }
-    wclear(active_window);
-    getcwd(active_path, 100);
-    OpenActiveDir(active_path, 100);
+    wclear(active_window.window->nwindow);
+    getcwd(active_window.window->active_path, PATH_LENGTH);
+    OpenActiveDir();
   } else {
-    return -1;
+    return;
   }
 
-  return 0;
+  ColorLine(NON_HIGHLIGHTED_COLOR);
+  active_window.current_line = 0;
+  ColorLine(HIGHLIGHTED_COLOR);
 }
 
+/*  Change active window and highlight first file in directory */
 void ChangeActiveWindow(void)
 {
-  if (active_window == left_dir_window)
-    active_window = right_dir_window;
-  else
-    active_window = left_dir_window;
+  WINDOW *prev_nwindow = NULL;
+
+  ColorLine(NON_HIGHLIGHTED_COLOR);
+  if (active_window.left) {
+    active_window.window = &right_fmwindow;
+    prev_nwindow = left_dir_window;
+    active_window.left = 0;
+  }
+  else {
+    active_window.window = &left_fmwindow;
+    prev_nwindow = right_dir_window;
+    active_window.left = 1;
+  }
+  active_window.current_line = 0;
+  ColorLine(HIGHLIGHTED_COLOR);
+
+  redrawwin(prev_nwindow);
+  redrawwin(active_window.window->nwindow);
 }
 
 int main(int argc, char **argv)
 {
-  char active_path[100];
   int symbol;
-  int active_line = 0,
-      prev_line = 0;
-  
-  if (argc > 1) {
-    strcpy(active_path, argv[1]);
-  } else {
-    getcwd(active_path, 100);
-  }
+ 
   InitializeNcurses();
   CreateWindows();
-  active_window = left_dir_window; 
-  wmove(active_window, 0, 0);
+  active_window.left = 0;
+  active_window.current_line = 0;
+  active_window.window = &right_fmwindow;
+  if (argc > 1) {
+    strcpy(left_fmwindow.active_path, argv[1]);
+    strcpy(right_fmwindow.active_path, argv[1]);
+  } else {
+    getcwd(left_fmwindow.active_path, PATH_LENGTH);
+    getcwd(right_fmwindow.active_path, PATH_LENGTH);
+  }
 
-  OpenActiveDir(active_path, 100);
-  wrefresh(left_dir_window);
-  active_window = right_dir_window;
-  OpenActiveDir(active_path, 100);
+  OpenActiveDir();
   wrefresh(right_dir_window);
-  active_window = left_dir_window;
-  
-  PickOutLine(&active_line, 1);
+
+  ChangeActiveWindow();  
+  OpenActiveDir();
+  wrefresh(left_dir_window);
+  ColorLine(HIGHLIGHTED_COLOR);
+
   while (1) {
-    symbol = wgetch(active_window);
+    symbol = wgetch(active_window.window->nwindow);
     if (symbol == 27)
       break;
     switch (symbol) {
       case KEY_UP:
-        if (active_line != 0) {
-          PickOutLine(&active_line, -1);
+        if (active_window.current_line != 0) {
+          PickOutLine(-1);
         }
         break;
       case KEY_DOWN:
-        if (active_line != DIR_WINDOW_HEIGHT - 1) {
-          PickOutLine(&active_line, 1);
+        if (active_window.current_line != active_window.lines_count - 1) {
+          PickOutLine(1);
         }
         break;
       case KEY_LEFT:
-        if (active_window == right_dir_window) {
-          ColorLine(active_line, 2);
+        if (!active_window.left) {
           ChangeActiveWindow();
-          ColorLine(active_line, 1);
           wrefresh(right_dir_window);
         }
         break;
       case KEY_RIGHT:
-        if (active_window == left_dir_window) {
-          ColorLine(active_line, 2);
+        if (active_window.left) {
           ChangeActiveWindow();
-          ColorLine(active_line, 1);
           wrefresh(left_dir_window);
         }
         break;
       case '\n':
-        if (ChangeCurrentDirectory(active_line, active_path) == 0) {
-          active_line = 0;
-          ColorLine(active_line, 1);
-        }
+        ChangeCurrentDirectory();
         break;
     }
   }
