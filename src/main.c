@@ -128,7 +128,7 @@ void OpenActiveDir(void)
     
     dir_prefix[1] = '\0';
     files_count = scandir(".", &name_list, NULL, alphasort);
-    if (active_window.lines_count < 0) {
+    if (files_count < 0) {
       /*  Error here */
     }
     head = &active_window.window->files;
@@ -233,6 +233,7 @@ void ChangeCurrentDirectory(void)
 
   ColorLine(NON_HIGHLIGHTED_COLOR);
   active_window.current_line = 0;
+  active_window.current_file = 0;
   ColorLine(HIGHLIGHTED_COLOR);
 }
 
@@ -240,7 +241,7 @@ void ChangeCurrentDirectory(void)
 void ChangeActiveWindow(void)
 {
   WINDOW *prev_nwindow = NULL;
-  struct List *head = active_window.window->files->next;
+  struct List *head = NULL;
   int current_y = 0;
 
   ColorLine(NON_HIGHLIGHTED_COLOR);
@@ -256,7 +257,9 @@ void ChangeActiveWindow(void)
   }
   active_window.current_line = 0;
   active_window.current_file = 0;
+  active_window.lines_count = ListSize(active_window.window->files);
   wclear(active_window.window->nwindow);
+  head = active_window.window->files->next;
   while (current_y < DIR_WINDOW_HEIGHT && head) {
     mvwprintw(active_window.window->nwindow, current_y, 0, "%s",
               head->file_name);
@@ -342,7 +345,8 @@ int main(int argc, char **argv)
         }
         break;
       case KEY_DOWN:
-        if (active_window.current_line != DIR_WINDOW_HEIGHT - 1) {
+        if (active_window.current_line != DIR_WINDOW_HEIGHT - 1 &&
+            active_window.current_file != active_window.lines_count - 1) {
           PickOutLine(1);
           ++active_window.current_file;
         } else if (active_window.current_file !=

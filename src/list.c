@@ -11,6 +11,18 @@ struct List* CreateList(void)
   return head;
 }
 
+int ListSize(struct List *head)
+{
+  int size = 0;
+  
+  head = head->next;
+  while (head) {
+    ++size;
+    head = head->next;
+  }
+  return size;
+}
+
 /*  Delete the linked list */
 void RemoveList(struct List *list)
 {

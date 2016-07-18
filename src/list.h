@@ -10,6 +10,9 @@ struct List {
 /*  Create the linked list */
 struct List* CreateList(void);
 
+/*  Returns list's size*/
+int ListSize(struct List *head);
+
 /*  Delete the linked list */
 void RemoveList(struct List *list);
 
