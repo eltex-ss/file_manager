@@ -1,16 +1,18 @@
-objects = main.o
+objects = main.o list.o
 
 target = file_manager
 
-CFLAGS = -Wall -pedantic -ansi -g -std=c99
+CFLAGS = -Wall -g -pedantic
 
 LDLIBS = -lncurses
 
 all : $(target) reloc
 
+
 $(target) : $(objects)
 		$(CC) -o $(target) $(LDLIBS) $^
 
+$(objects) : list.h
 $(objects) : %.o : %.c
 		$(CC) -c $(CFLAGS) $<
 

@@ -14,6 +14,8 @@
 
 #include <dirent.h>
 
+#include "list.h"
+
 /*  Constants */
 #define BORDER_WINDOW_HEIGHT 24
 #define BORDER_WINDOW_WIDTH 40
@@ -30,14 +32,16 @@
 /*  My structs */
 /*  File manager window */
 struct FMWindow {
-  char    active_path[PATH_LENGTH]; /* path to active directory */
-  WINDOW *nwindow;
+  char        active_path[PATH_LENGTH]; /* path to active directory */
+  struct List *files;
+  WINDOW      *nwindow;
 };
 
 /* Struct represents file manager's active window */
 struct ActiveWindow {
   int left;                /* if active winow is left, this = 1 else = 0*/
   int current_line;        /* highlighted line */
+  int current_file;        /* file num in directory */
   int lines_count;         /* files count in this directory */
   struct FMWindow *window; /* pointer to left or right FMWindow */
 };
@@ -72,6 +76,7 @@ void CreateWindows(void)
   left_dir_window = derwin(left_border_window, DIR_WINDOW_HEIGHT,
                            DIR_WINDOW_WIDTH, 1, 1);
   left_fmwindow.nwindow = left_dir_window;
+  left_fmwindow.files = CreateList();
   box(left_border_window, 0, 0);
   keypad(left_dir_window, 1);
   wrefresh(left_border_window);
@@ -82,6 +87,7 @@ void CreateWindows(void)
   right_dir_window = derwin(right_border_window, DIR_WINDOW_HEIGHT,
                             DIR_WINDOW_WIDTH, 1, 1);
   right_fmwindow.nwindow = right_dir_window;
+  right_fmwindow.files = CreateList();
   keypad(right_dir_window, 1);
   box(right_border_window, 0, 0);
   wrefresh(right_border_window);
@@ -102,8 +108,7 @@ void InitializeNcurses(void)
   init_pair(2, COLOR_WHITE, COLOR_BLACK);
 }
 
-/* Just open the directory and print all files
- * (working if files count < 23) */
+/* Just open the directory and print all files */
 void OpenActiveDir(void)
 {
   DIR *dir;
@@ -112,29 +117,50 @@ void OpenActiveDir(void)
   if (dir == NULL) {
     /*  Some errors occur */
   } else {
-    struct dirent *current_file = NULL;
     struct stat file_info;
+    struct dirent **name_list;
+    struct List **head;
     char file_path[PATH_LENGTH];
-    int current_y = 0;
     char dir_prefix[2];
+    char file_name[100];
+    int current_y = 0;
+    int files_count;
     
     dir_prefix[1] = '\0';
-    while ((current_file = readdir(dir)) != NULL) {
-      if (current_file->d_name[0] == '.' &&
-          current_file->d_name[1] != '.')
+    files_count = scandir(".", &name_list, NULL, alphasort);
+    if (active_window.lines_count < 0) {
+      /*  Error here */
+    }
+    head = &active_window.window->files;
+    ClearList(*head); 
+
+    while (files_count--) {
+      if (name_list[files_count]->d_name[0] == '.' &&
+          name_list[files_count]->d_name[1] != '.')
         continue;
 
       sprintf(file_path, "%s/%s",active_window.window->active_path,
-             current_file->d_name);
+              name_list[files_count]->d_name);
       stat(file_path, &file_info);
       if (S_ISDIR(file_info.st_mode))
         dir_prefix[0] = '/';
       else
         dir_prefix[0] = '\0';
-      mvwprintw(active_window.window->nwindow, current_y++, 0, "%s%s",
-                dir_prefix, current_file->d_name);
+      sprintf(file_name, "%s%s", dir_prefix, name_list[files_count]->d_name);
+      
+      AddLeaf(file_name, *head);
+      free(name_list[files_count]);
+      ++current_y;
     }
     active_window.lines_count = current_y;
+    current_y = 0;
+    free(name_list);
+    head = &((*head)->next); 
+    while (*head) {
+      mvwprintw(active_window.window->nwindow, current_y++, 0, "%s",
+                (*head)->file_name);
+      head = &((*head)->next); 
+    } 
     closedir(dir);
   }
 }
@@ -180,9 +206,10 @@ void ChangeCurrentDirectory(void)
   char path[PATH_LENGTH];
   struct stat file_info;
   int active_line = active_window.current_line;
+  int i;
 
   mvwinnstr(active_window.window->nwindow, active_line, 0, line, 38);
-  for (int i = 36; i > -1; --i) {
+  for (i = 36; i > -1; --i) {
     if (line[i] != ' ') {
       line[i + 1] = '\0';
       break;
@@ -213,6 +240,8 @@ void ChangeCurrentDirectory(void)
 void ChangeActiveWindow(void)
 {
   WINDOW *prev_nwindow = NULL;
+  struct List *head = active_window.window->files->next;
+  int current_y = 0;
 
   ColorLine(NON_HIGHLIGHTED_COLOR);
   if (active_window.left) {
@@ -226,10 +255,51 @@ void ChangeActiveWindow(void)
     active_window.left = 1;
   }
   active_window.current_line = 0;
+  active_window.current_file = 0;
+  wclear(active_window.window->nwindow);
+  while (current_y < DIR_WINDOW_HEIGHT && head) {
+    mvwprintw(active_window.window->nwindow, current_y, 0, "%s",
+              head->file_name);
+    ++current_y;
+    head = head->next;
+  }
+  
   ColorLine(HIGHLIGHTED_COLOR);
 
   redrawwin(prev_nwindow);
   redrawwin(active_window.window->nwindow);
+}
+
+void fmscroll(int step)
+{
+  int current_pos = 0;
+  int current_y = 0;
+  int end;
+  struct List *head;
+
+  head = active_window.window->files->next;
+  wclear(active_window.window->nwindow);
+  active_window.current_file += step;
+  if (step > 0) {
+    end = active_window.current_file - DIR_WINDOW_HEIGHT + 1;
+  } else {
+    end = active_window.current_file;
+  }
+  while (current_pos != end) {
+    head = head->next;
+    ++current_pos;
+  }
+
+  while (current_pos < active_window.lines_count &&
+         head) {
+    mvwprintw(active_window.window->nwindow, current_y, 0, "%s",
+              head->file_name);
+    ++current_pos;
+    ++current_y;
+    head = head->next;
+  }
+  wrefresh(active_window.window->nwindow);
+  ColorLine(1);
 }
 
 int main(int argc, char **argv)
@@ -240,6 +310,7 @@ int main(int argc, char **argv)
   CreateWindows();
   active_window.left = 0;
   active_window.current_line = 0;
+  active_window.current_file = 0;
   active_window.window = &right_fmwindow;
   if (argc > 1) {
     strcpy(left_fmwindow.active_path, argv[1]);
@@ -265,11 +336,18 @@ int main(int argc, char **argv)
       case KEY_UP:
         if (active_window.current_line != 0) {
           PickOutLine(-1);
+          --active_window.current_file;
+        } else if (active_window.current_file != 0) {
+          fmscroll(-1);
         }
         break;
       case KEY_DOWN:
-        if (active_window.current_line != active_window.lines_count - 1) {
+        if (active_window.current_line != DIR_WINDOW_HEIGHT - 1) {
           PickOutLine(1);
+          ++active_window.current_file;
+        } else if (active_window.current_file !=
+                   active_window.lines_count - 1) {
+          fmscroll(1);
         }
         break;
       case KEY_LEFT:
