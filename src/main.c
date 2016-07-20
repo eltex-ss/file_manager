@@ -211,14 +211,15 @@ void GetPrevState(void)
  *  in text editor */
 void OpenFile(void)
 {
-  char line[38];
+  char line[DIR_WINDOW_WIDTH];
   char path[PATH_LENGTH];
   char print_pattern[6];
   struct stat file_info;
   int active_line = active_window.current_line;
   int i;
 
-  mvwinnstr(active_window.window->nwindow, active_line, 0, line, 38);
+  mvwinnstr(active_window.window->nwindow, active_line, 0, line,
+            DIR_WINDOW_WIDTH);
   for (i = 36; i > -1; --i) {
     if (line[i] != ' ') {
       line[i + 1] = '\0';
