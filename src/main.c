@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include <unistd.h>
+#include <sys/wait.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -33,8 +34,8 @@
 /*  File manager window */
 struct FMWindow {
   char        active_path[PATH_LENGTH]; /* path to active directory */
-  struct List *files;
-  WINDOW      *nwindow;
+  struct List *files;                   /* list of files */
+  WINDOW      *nwindow;                 /* pointer to ncurses window */
 };
 
 /* Struct represents file manager's active window */
@@ -198,6 +199,86 @@ void PickOutLine(int delta)
   ColorLine(1);
 }
 
+/*  Return program to previous state that was
+ *  before executing another program */
+void GetPrevState(void)
+{
+
+}
+
+/*  If current file is directory then open the directory. Otherwise if
+ *  file is marked as executable then execute it, else open file
+ *  in text editor */
+void OpenFile(void)
+{
+  char line[38];
+  char path[PATH_LENGTH];
+  char print_pattern[6];
+  struct stat file_info;
+  int active_line = active_window.current_line;
+  int i;
+
+  mvwinnstr(active_window.window->nwindow, active_line, 0, line, 38);
+  for (i = 36; i > -1; --i) {
+    if (line[i] != ' ') {
+      line[i + 1] = '\0';
+      break;
+    }
+  }
+  if (line[0] == '/')
+    sprintf(print_pattern, "%s", "%s%s");
+  else
+    sprintf(print_pattern, "%s", "%s/%s");
+  sprintf(path, print_pattern, active_window.window->active_path, line);
+  if (stat(path, &file_info) == -1) {
+    /*  Can't get info about this file */
+    return;
+  }
+  if (S_ISDIR(file_info.st_mode)) {
+    /*  Change current directory */
+    if (chdir(path) == -1) {
+      return;
+    }
+    wclear(active_window.window->nwindow);
+    getcwd(active_window.window->active_path, PATH_LENGTH);
+    OpenActiveDir();
+  } else if (file_info.st_mode & S_IXUSR ||
+             file_info.st_mode & S_IXGRP || 
+             file_info.st_mode & S_IXOTH) {
+    if (fork() == 0) {
+      /*  Execute file */
+      execlp(path, path, (char *) NULL);
+    } else {
+      int status;
+      
+      wait(&status);
+      GetPrevState();
+    }
+  }
+  else if (file_info.st_mode & S_IRUSR ||
+           file_info.st_mode & S_IRGRP || 
+           file_info.st_mode & S_IROTH) {
+    if (fork() == 0) {
+      /*  Open file in text editor */
+      execlp(path, line, (char *) NULL);
+    }
+    else {
+      int status;
+
+      wait(&status);
+      GetPrevState();
+    }
+  } else {
+    return;
+  }
+
+  ColorLine(NON_HIGHLIGHTED_COLOR);
+  active_window.current_line = 0;
+  active_window.current_file = 0;
+  ColorLine(HIGHLIGHTED_COLOR);
+ 
+}
+
 /*  Change current directory if selected file is directory and
  *  highlight the first file in directory */
 void ChangeCurrentDirectory(void)
@@ -305,31 +386,9 @@ void fmscroll(int step)
   ColorLine(1);
 }
 
-int main(int argc, char **argv)
+void HandleKeyPress()
 {
-  int symbol;
- 
-  InitializeNcurses();
-  CreateWindows();
-  active_window.left = 0;
-  active_window.current_line = 0;
-  active_window.current_file = 0;
-  active_window.window = &right_fmwindow;
-  if (argc > 1) {
-    strcpy(left_fmwindow.active_path, argv[1]);
-    strcpy(right_fmwindow.active_path, argv[1]);
-  } else {
-    getcwd(left_fmwindow.active_path, PATH_LENGTH);
-    getcwd(right_fmwindow.active_path, PATH_LENGTH);
-  }
-
-  OpenActiveDir();
-  wrefresh(right_dir_window);
-
-  ChangeActiveWindow();  
-  OpenActiveDir();
-  wrefresh(left_dir_window);
-  ColorLine(HIGHLIGHTED_COLOR);
+  unsigned int symbol;
 
   while (1) {
     symbol = wgetch(active_window.window->nwindow);
@@ -371,7 +430,34 @@ int main(int argc, char **argv)
         break;
     }
   }
- 
+}
+
+int main(int argc, char **argv)
+{
+  InitializeNcurses();
+  CreateWindows();
+  active_window.left = 0;
+  active_window.current_line = 0;
+  active_window.current_file = 0;
+  active_window.window = &right_fmwindow;
+  if (argc > 1) {
+    strcpy(left_fmwindow.active_path, argv[1]);
+    strcpy(right_fmwindow.active_path, argv[1]);
+  } else {
+    getcwd(left_fmwindow.active_path, PATH_LENGTH);
+    getcwd(right_fmwindow.active_path, PATH_LENGTH);
+  }
+
+  OpenActiveDir();
+  wrefresh(right_dir_window);
+
+  ChangeActiveWindow();  
+  OpenActiveDir();
+  wrefresh(left_dir_window);
+  ColorLine(HIGHLIGHTED_COLOR);
+
+  HandleKeyPress();
+
   Finalize();
   return 0;
 }

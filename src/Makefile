@@ -2,9 +2,13 @@ objects = main.o list.o
 
 target = file_manager
 
-CFLAGS = -Wall -g -pedantic
+INCLUDE_FLAGS = -Iinclude
+
+CFLAGS = -Wall -g -pedantic $(INCLUDE_FLAGS)
 
 LDLIBS = -lncurses
+
+VPATH = include
 
 all : $(target) reloc
 
@@ -14,7 +18,7 @@ $(target) : $(objects)
 
 $(objects) : list.h
 $(objects) : %.o : %.c
-		$(CC) -c $(CFLAGS) $<
+		$(CC) -c $(CFLAGS) $< -o $@
 
 reloc :
 		mkdir -p ../build
