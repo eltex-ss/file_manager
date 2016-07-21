@@ -57,7 +57,8 @@ static WINDOW *left_border_window,
 static struct FMWindow left_fmwindow,
                        right_fmwindow;
 static struct ActiveWindow active_window;
-
+static char *path_to_text_editor = "/home/Alexander/Projects/SummerSchool/"
+                                   "file_manager/bin/text_editor";
 /*  Functions */
 void SigWinch(int signo)
 {
@@ -109,6 +110,20 @@ void InitializeNcurses(void)
   init_pair(2, COLOR_WHITE, COLOR_BLACK);
 }
 
+/*  Print filenames in fmwindow*/
+void PrintFileList(struct FMWindow *fmwindow)
+{
+  struct List *head = fmwindow->files->next;
+  int current_y = 0;
+
+  while (head) {
+    mvwprintw(fmwindow->nwindow, current_y, 0, "%s", head->file_name);
+    head = head->next;
+    ++current_y;
+  }
+  wrefresh(fmwindow->nwindow);
+}
+
 /* Just open the directory and print all files */
 void OpenActiveDir(void)
 {
@@ -156,18 +171,16 @@ void OpenActiveDir(void)
     active_window.lines_count = current_y;
     current_y = 0;
     free(name_list);
-    head = &((*head)->next); 
-    while (*head) {
-      mvwprintw(active_window.window->nwindow, current_y++, 0, "%s",
-                (*head)->file_name);
-      head = &((*head)->next); 
-    } 
+    PrintFileList(active_window.window);
     closedir(dir);
   }
 }
 
 void Finalize(void)
 {
+  RemoveList(left_fmwindow.files);
+  RemoveList(right_fmwindow.files);
+
   delwin(right_dir_window);
   delwin(right_border_window);
   delwin(left_dir_window);
@@ -197,87 +210,6 @@ void PickOutLine(int delta)
   ColorLine(2);
   active_window.current_line += delta;
   ColorLine(1);
-}
-
-/*  Return program to previous state that was
- *  before executing another program */
-void GetPrevState(void)
-{
-
-}
-
-/*  If current file is directory then open the directory. Otherwise if
- *  file is marked as executable then execute it, else open file
- *  in text editor */
-void OpenFile(void)
-{
-  char line[DIR_WINDOW_WIDTH];
-  char path[PATH_LENGTH];
-  char print_pattern[6];
-  struct stat file_info;
-  int active_line = active_window.current_line;
-  int i;
-
-  mvwinnstr(active_window.window->nwindow, active_line, 0, line,
-            DIR_WINDOW_WIDTH);
-  for (i = 36; i > -1; --i) {
-    if (line[i] != ' ') {
-      line[i + 1] = '\0';
-      break;
-    }
-  }
-  if (line[0] == '/')
-    sprintf(print_pattern, "%s", "%s%s");
-  else
-    sprintf(print_pattern, "%s", "%s/%s");
-  sprintf(path, print_pattern, active_window.window->active_path, line);
-  if (stat(path, &file_info) == -1) {
-    /*  Can't get info about this file */
-    return;
-  }
-  if (S_ISDIR(file_info.st_mode)) {
-    /*  Change current directory */
-    if (chdir(path) == -1) {
-      return;
-    }
-    wclear(active_window.window->nwindow);
-    getcwd(active_window.window->active_path, PATH_LENGTH);
-    OpenActiveDir();
-  } else if (file_info.st_mode & S_IXUSR ||
-             file_info.st_mode & S_IXGRP || 
-             file_info.st_mode & S_IXOTH) {
-    if (fork() == 0) {
-      /*  Execute file */
-      execlp(path, path, (char *) NULL);
-    } else {
-      int status;
-      
-      wait(&status);
-      GetPrevState();
-    }
-  }
-  else if (file_info.st_mode & S_IRUSR ||
-           file_info.st_mode & S_IRGRP || 
-           file_info.st_mode & S_IROTH) {
-    if (fork() == 0) {
-      /*  Open file in text editor */
-      execlp(path, line, (char *) NULL);
-    }
-    else {
-      int status;
-
-      wait(&status);
-      GetPrevState();
-    }
-  } else {
-    return;
-  }
-
-  ColorLine(NON_HIGHLIGHTED_COLOR);
-  active_window.current_line = 0;
-  active_window.current_file = 0;
-  ColorLine(HIGHLIGHTED_COLOR);
- 
 }
 
 /*  Change current directory if selected file is directory and
@@ -319,41 +251,131 @@ void ChangeCurrentDirectory(void)
   ColorLine(HIGHLIGHTED_COLOR);
 }
 
-/*  Change active window and highlight first file in directory */
-void ChangeActiveWindow(void)
+/*  Initialize app structures and print launch app */
+void InitializeApp(void)
 {
-  WINDOW *prev_nwindow = NULL;
-  struct List *head = NULL;
-  int current_y = 0;
-
-  ColorLine(NON_HIGHLIGHTED_COLOR);
-  if (active_window.left) {
-    active_window.window = &right_fmwindow;
-    prev_nwindow = left_dir_window;
-    active_window.left = 0;
-  }
-  else {
-    active_window.window = &left_fmwindow;
-    prev_nwindow = right_dir_window;
-    active_window.left = 1;
-  }
+  active_window.left = 0;
   active_window.current_line = 0;
   active_window.current_file = 0;
-  active_window.lines_count = ListSize(active_window.window->files);
-  wclear(active_window.window->nwindow);
-  head = active_window.window->files->next;
-  while (current_y < DIR_WINDOW_HEIGHT && head) {
-    mvwprintw(active_window.window->nwindow, current_y, 0, "%s",
-              head->file_name);
-    ++current_y;
-    head = head->next;
-  }
-  
-  ColorLine(HIGHLIGHTED_COLOR);
+  active_window.window = &right_fmwindow;
+ 
+  getcwd(left_fmwindow.active_path, PATH_LENGTH);
+  getcwd(right_fmwindow.active_path, PATH_LENGTH);
 
-  redrawwin(prev_nwindow);
-  redrawwin(active_window.window->nwindow);
+  OpenActiveDir();
+  wrefresh(right_dir_window);
+
+  ChangeActiveWindow();  
+  OpenActiveDir();
+  wrefresh(left_dir_window);
+  ColorLine(HIGHLIGHTED_COLOR);
 }
+
+/*  Return program to previous state that was
+ *  before executing another program */
+void GetPrevState(void)
+{
+  Finalize();
+  InitializeNcurses();
+  CreateWindows();
+  InitializeApp();
+  
+  wclear(stdscr);
+  box(left_border_window, 0, 0);
+  box(right_border_window, 0, 0);
+  wrefresh(left_border_window);
+  wrefresh(right_border_window);
+
+  PrintFileList(&left_fmwindow);
+  PrintFileList(&right_fmwindow);
+  wmove(left_dir_window, 2, 0);
+  curs_set(0);
+  redrawwin(stdscr);
+  redrawwin(left_border_window);
+  redrawwin(left_dir_window);
+  redrawwin(right_dir_window);
+}
+
+/*  If current file is directory then open the directory. Otherwise if
+ *  file is marked as executable then execute it, else open file
+ *  in text editor */
+void OpenFile(void)
+{
+  char line[DIR_WINDOW_WIDTH];
+  char path[PATH_LENGTH];
+  char print_pattern[6];
+  struct stat file_info;
+  int active_line = active_window.current_line;
+  int i;
+  int is_dir;
+
+  mvwinnstr(active_window.window->nwindow, active_line, 0, line,
+            DIR_WINDOW_WIDTH);
+  for (i = 36; i > -1; --i) {
+    if (line[i] != ' ') {
+      line[i + 1] = '\0';
+      break;
+    }
+  }
+
+  is_dir = line[0] == '/';
+  if (is_dir)
+    sprintf(print_pattern, "%s", "%s%s");
+  else
+    sprintf(print_pattern, "%s", "%s/%s");
+  sprintf(path, print_pattern, active_window.window->active_path, line);
+  if (stat(path, &file_info) == -1) {
+    /*  Can't get info about this file */
+    return;
+  }
+  if (is_dir) {
+    /*  Change current directory */
+    if (chdir(path) == -1) {
+      return;
+    }
+    wclear(active_window.window->nwindow);
+    getcwd(active_window.window->active_path, PATH_LENGTH);
+    OpenActiveDir();
+  } else if (file_info.st_mode & S_IXUSR ||
+             file_info.st_mode & S_IXGRP || 
+             file_info.st_mode & S_IXOTH) {
+    if (fork() == 0) {
+      /*  Execute file */
+      Finalize();
+      wclear(stdscr);
+      execlp(path, path, (char *) NULL);
+    } else {
+      int status;
+      
+      wait(&status);
+      GetPrevState();
+    }
+  }
+  else if (file_info.st_mode & S_IRUSR ||
+           file_info.st_mode & S_IRGRP || 
+           file_info.st_mode & S_IROTH) {
+    if (fork() == 0) {
+      /*  Open file in text editor */
+      Finalize();
+      execlp(path_to_text_editor, "text_editor", line, (char *) NULL);
+    }
+    else {
+      int status;
+
+      wait(&status);
+      GetPrevState();
+    }
+  } else {
+    return;
+  }
+
+  ColorLine(NON_HIGHLIGHTED_COLOR);
+  active_window.current_line = 0;
+  active_window.current_file = 0;
+  ColorLine(HIGHLIGHTED_COLOR); 
+}
+
+
 
 void fmscroll(int step)
 {
@@ -427,7 +449,8 @@ void HandleKeyPress()
         }
         break;
       case '\n':
-        ChangeCurrentDirectory();
+        OpenFile();
+        /* ChangeCurrentDirectory(); */
         break;
     }
   }
@@ -437,28 +460,12 @@ int main(int argc, char **argv)
 {
   InitializeNcurses();
   CreateWindows();
-  active_window.left = 0;
-  active_window.current_line = 0;
-  active_window.current_file = 0;
-  active_window.window = &right_fmwindow;
+  InitializeApp();
   if (argc > 1) {
     strcpy(left_fmwindow.active_path, argv[1]);
     strcpy(right_fmwindow.active_path, argv[1]);
-  } else {
-    getcwd(left_fmwindow.active_path, PATH_LENGTH);
-    getcwd(right_fmwindow.active_path, PATH_LENGTH);
   }
-
-  OpenActiveDir();
-  wrefresh(right_dir_window);
-
-  ChangeActiveWindow();  
-  OpenActiveDir();
-  wrefresh(left_dir_window);
-  ColorLine(HIGHLIGHTED_COLOR);
-
   HandleKeyPress();
-
   Finalize();
   return 0;
 }
