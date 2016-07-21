@@ -110,7 +110,8 @@ void InitializeNcurses(void)
   init_pair(2, COLOR_WHITE, COLOR_BLACK);
 }
 
-/*  Print filenames in fmwindow*/
+
+
 void PrintFileList(struct FMWindow *fmwindow)
 {
   struct List *head = fmwindow->files->next;
@@ -212,43 +213,40 @@ void PickOutLine(int delta)
   ColorLine(1);
 }
 
-/*  Change current directory if selected file is directory and
- *  highlight the first file in directory */
-void ChangeCurrentDirectory(void)
+/*  Change active window and highlight first file in directory */
+void ChangeActiveWindow(void)
 {
-  char line[38];
-  char path[PATH_LENGTH];
-  struct stat file_info;
-  int active_line = active_window.current_line;
-  int i;
-
-  mvwinnstr(active_window.window->nwindow, active_line, 0, line, 38);
-  for (i = 36; i > -1; --i) {
-    if (line[i] != ' ') {
-      line[i + 1] = '\0';
-      break;
-    }
-  }
-  sprintf(path, "%s/%s", active_window.window->active_path, line);
-  if (stat(path, &file_info) == -1) {
-    /*  Can't get info about this file */
-    return;
-  }
-  if (S_ISDIR(file_info.st_mode)) {
-    if (chdir(path) == -1) {
-      return;
-    }
-    wclear(active_window.window->nwindow);
-    getcwd(active_window.window->active_path, PATH_LENGTH);
-    OpenActiveDir();
-  } else {
-    return;
-  }
+  WINDOW *prev_nwindow = NULL;
+  struct List *head = NULL;
+  int current_y = 0;
 
   ColorLine(NON_HIGHLIGHTED_COLOR);
+  if (active_window.left) {
+    active_window.window = &right_fmwindow;
+    prev_nwindow = left_dir_window;
+    active_window.left = 0;
+  }
+  else {
+    active_window.window = &left_fmwindow;
+    prev_nwindow = right_dir_window;
+    active_window.left = 1;
+  }
   active_window.current_line = 0;
   active_window.current_file = 0;
+  active_window.lines_count = ListSize(active_window.window->files);
+  wclear(active_window.window->nwindow);
+  head = active_window.window->files->next;
+  while (current_y < DIR_WINDOW_HEIGHT && head) {
+    mvwprintw(active_window.window->nwindow, current_y, 0, "%s",
+              head->file_name);
+    ++current_y;
+    head = head->next;
+  }
+  
   ColorLine(HIGHLIGHTED_COLOR);
+
+  redrawwin(prev_nwindow);
+  redrawwin(active_window.window->nwindow);
 }
 
 /*  Initialize app structures and print launch app */
@@ -375,8 +373,7 @@ void OpenFile(void)
   ColorLine(HIGHLIGHTED_COLOR); 
 }
 
-
-
+/*  Scroll window by step */
 void fmscroll(int step)
 {
   int current_pos = 0;
