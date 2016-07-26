@@ -12,6 +12,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <pthread.h>
 
 #include <dirent.h>
 
@@ -45,6 +46,13 @@ struct ActiveWindow {
   int current_file;        /*  File num in directory. */
   int lines_count;         /*  Files count in this directory. */
   struct FMWindow *window; /*  Pointer to left or right FMWindow. */
+};
+
+struct CopyInfo {
+  int     old_file_d,
+          new_file_d;
+  off_t   file_size;
+  ssize_t bytes_copied;
 };
 
 /*  Global variables. */
@@ -82,6 +90,7 @@ void OpenFile(void);
 void CopyFile(void);
 
 /*  Helpfull functions. */
+void *CopyThreadOperation(void *vbytes_copied);
 void PrintFileList(struct FMWindow *fmwindow);
 void ColorLine(int color_num);
 void PickOutLine(int delta);
@@ -192,53 +201,48 @@ void Finalize(void)
 /*  Just open the directory and print all files. */
 void OpenActiveDir(void)
 {
-  DIR *dir;
-
-  dir = opendir(active_window.window->active_path);
-  if (dir == NULL) {
-    /*  Some errors occur. */
-  } else {
-    struct stat file_info;
-    struct dirent **name_list;
-    struct List **head;
-    char file_path[PATH_LENGTH];
-    char dir_prefix[2];
-    char file_name[100];
-    int current_y = 0;
-    int files_count;
-    
-    dir_prefix[1] = '\0';
-    files_count = scandir(".", &name_list, NULL, alphasort);
-    if (files_count < 0) {
-      /*  Error here */
-    }
-    head = &active_window.window->files;
-    ClearList(*head); 
-
-    while (files_count--) {
-      if (name_list[files_count]->d_name[0] == '.' &&
-          name_list[files_count]->d_name[1] != '.')
-        continue;
-
-      sprintf(file_path, "%s/%s",active_window.window->active_path,
-              name_list[files_count]->d_name);
-      stat(file_path, &file_info);
-      if (S_ISDIR(file_info.st_mode))
-        dir_prefix[0] = '/';
-      else
-        dir_prefix[0] = '\0';
-      sprintf(file_name, "%s%s", dir_prefix, name_list[files_count]->d_name);
-      
-      AddLeaf(file_name, *head);
-      free(name_list[files_count]);
-      ++current_y;
-    }
-    active_window.lines_count = current_y;
-    current_y = 0;
-    free(name_list);
-    PrintFileList(active_window.window);
-    closedir(dir);
+  struct stat file_info;
+  struct dirent **name_list;
+  struct List **head;
+  char file_path[PATH_LENGTH];
+  char dir_prefix[2];
+  char file_name[100];
+  int current_y = 0;
+  int files_count;
+  
+  dir_prefix[1] = '\0';
+  files_count = scandir(active_window.window->active_path,
+                        &name_list, NULL, alphasort);
+  if (files_count < 0) {
+    /*  Error here */
+    perror("Can't open dir");
+    return;
   }
+  head = &active_window.window->files;
+  ClearList(*head); 
+
+  while (files_count--) {
+    if (name_list[files_count]->d_name[0] == '.' &&
+        name_list[files_count]->d_name[1] != '.')
+      continue;
+
+    sprintf(file_path, "%s/%s",active_window.window->active_path,
+            name_list[files_count]->d_name);
+    stat(file_path, &file_info);
+    if (S_ISDIR(file_info.st_mode))
+      dir_prefix[0] = '/';
+    else
+      dir_prefix[0] = '\0';
+    sprintf(file_name, "%s%s", dir_prefix, name_list[files_count]->d_name);
+    
+    AddLeaf(file_name, *head);
+    free(name_list[files_count]);
+    ++current_y;
+  }
+  active_window.lines_count = current_y;
+  current_y = 0;
+  free(name_list);
+  PrintFileList(active_window.window);
 }
 
 /*  Change active window and highlight first file in directory. */
@@ -253,8 +257,7 @@ void ChangeActiveWindow(void)
     active_window.window = &right_fmwindow;
     prev_nwindow = left_dir_window;
     active_window.left = 0;
-  }
-  else {
+  } else {
     active_window.window = &left_fmwindow;
     prev_nwindow = right_dir_window;
     active_window.left = 1;
@@ -354,13 +357,58 @@ void CopyFile(void)
          *copy_progress_bar_bkgd,
          *copy_progress_bar_frgd,
          *copy_text_window;
-  char file_name[100];
+  struct FMWindow *inactive_fmwindow;
+  char            file_name[100];
+  char            file_path[PATH_LENGTH];
+  int             old_file_d,
+                  new_file_d;
+  off_t           file_size;
+  struct stat     file_info;
+  pthread_t       copy_thread;
+  struct CopyInfo copy_info;
+  ssize_t         copy_block_size;
+  int             current_block_count = 0,
+                  prev_block_count = 0;
+
+  ReadCurrentLine(file_name);
+  if (file_name[0] == '\0') {
+    /*  Directory, exit. */
+    return;
+  }
+  
+  if ((old_file_d = open(file_name, O_RDONLY, 0666)) == -1) {
+    perror("Can't open file to copy");
+    return;
+  }
+  if (fstat(old_file_d, &file_info) == -1) {
+    perror("Can't stat file");
+    return;
+  }
+  
+  file_size = file_info.st_size;
+  if (file_size == 0) {
+    return;
+  }
+  copy_block_size = file_size / 10;
+  sprintf(file_name, "%s--copy", file_name);
+  /*  TODO: add handling sutuation when file exist. */
+  if (active_window.left) {
+    inactive_fmwindow = &right_fmwindow;
+  }
+  else {
+    inactive_fmwindow = &left_fmwindow;
+  }
+  sprintf(file_path, "%s/%s", inactive_fmwindow->active_path, file_name);
+  if ((new_file_d = open(file_path, O_CREAT | O_WRONLY, 0666)) == -1) {
+    perror("Can't create new file");
+    return;
+  }
 
   copy_main_window = newwin(6, 14, 10, 10);
   copy_inside_window = derwin(copy_main_window, 4, 12, 1, 1);
   copy_progress_bar_bkgd = derwin(copy_inside_window, 1, 10, 1, 1);
   wbkgd(copy_progress_bar_bkgd, COLOR_PAIR(3));
-  copy_progress_bar_frgd = NULL;
+  copy_progress_bar_frgd = derwin(copy_progress_bar_bkgd, 1, 1, 0, 0);
   wbkgd(copy_progress_bar_frgd, COLOR_PAIR(4));
   copy_text_window = derwin(copy_inside_window, 1, 10, 2, 1);
   box(copy_main_window, 0, 0);
@@ -370,17 +418,58 @@ void CopyFile(void)
   mvwprintw(copy_text_window, 0, 1, "Copying");
   wrefresh(copy_text_window);
 
-  mvwinnstr(active_window.window->nwindow, active_window.current_line, 0,
-            file_name, DIR_WINDOW_WIDTH);
+  copy_info.old_file_d = old_file_d;
+  copy_info.new_file_d = new_file_d;
+  copy_info.file_size = file_size;
+  copy_info.bytes_copied = 0;
+  pthread_create(&copy_thread, NULL, CopyThreadOperation, (void *) &copy_info);
+  while (copy_info.bytes_copied != file_size) {
+    current_block_count = copy_info.bytes_copied / copy_block_size;
+    if (current_block_count != prev_block_count) {
+      wresize(copy_progress_bar_frgd, 1, current_block_count);
+      wbkgd(copy_progress_bar_frgd, COLOR_PAIR(4));
+      wrefresh(copy_progress_bar_frgd);
+      prev_block_count = current_block_count; 
+    }
+    usleep(1000);
+  }
 
-  getch();
   /*  Finalize. */
   delwin(copy_text_window);
+  delwin(copy_progress_bar_frgd);
   delwin(copy_progress_bar_bkgd);
   delwin(copy_inside_window);
   delwin(copy_main_window);
 
-  redrawwin(left_dir_window);
+  ChangeActiveWindow();
+  OpenActiveDir();
+  ChangeActiveWindow();
+  
+  wrefresh(inactive_fmwindow->nwindow);
+  wrefresh(active_window.window->nwindow);
+}
+
+void *CopyThreadOperation(void *vcopy_info)
+{
+  struct CopyInfo   *copy_info = vcopy_info;
+  char              copy_buf[100];
+  ssize_t           bytes_read = 0;
+
+  copy_info->bytes_copied = 0;
+  while (copy_info->bytes_copied < copy_info->file_size) {
+    if ((bytes_read = read(copy_info->old_file_d, copy_buf, 100)) <= 0) {
+      perror("Can't read from copying file");
+    }
+    if (write(copy_info->new_file_d, copy_buf, bytes_read) <= 0) {
+      perror("Can't write into the new file");
+    }
+    copy_info->bytes_copied += bytes_read;
+    usleep(1000);
+  }
+  close(copy_info->old_file_d);
+  close(copy_info->new_file_d);
+
+  pthread_exit(NULL);
 }
 
 void PrintFileList(struct FMWindow *fmwindow)

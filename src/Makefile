@@ -6,7 +6,7 @@ INCLUDE_FLAGS = -Iinclude
 
 CFLAGS = -Wall -g -pedantic $(INCLUDE_FLAGS)
 
-LDLIBS = -lncurses
+LDLIBS = -lncurses -pthread
 
 VPATH = include
 
