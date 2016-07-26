@@ -60,15 +60,85 @@ static WINDOW *left_border_window,
 static struct FMWindow left_fmwindow,
                        right_fmwindow;
 static struct ActiveWindow active_window;
-static char *path_to_text_editor = "/home/Alexander/Projects/SummerSchool/"
+static char *path_to_text_editor = "/home/Alexander/Projects/SummerSchool/"\
                                    "file_manager/bin/text_editor";
-/*  Functions. */
+
+/* ========================== */
+/*                            */
+/*  Interface.                */
+/*                            */
+
+/*  Lookup functions. */
+void SigWinch(int signo);
+void InitializeNcurses(void);
+void InitializeApp(void);
+void CreateWindows(void);
+void Finalize(void);
+
+/*  File manager functional. */
+void OpenActiveDir(void);
+void ChangeActiveWindow(void);
+void OpenFile(void);
+void CopyFile(void);
+
+/*  Helpfull functions. */
+void PrintFileList(struct FMWindow *fmwindow);
+void ColorLine(int color_num);
+void PickOutLine(int delta);
+void GetPrevState(void);
+void ReadCurrentLine(char *file_name);
+void FmScroll(int step);
+void HandleKeyPress(void);
+
+/* ========================== */
+/*                            */
+/*  Definitions.              */
+/*                            */
+
+/*  Resize window when signal emited. */
 void SigWinch(int signo)
 {
   struct winsize size;
   ioctl(stdout, TIOCGWINSZ, (char *)&size);
   resizeterm(size.ws_row, size.ws_col);
   refresh();
+}
+
+void InitializeNcurses(void)
+{
+  initscr();
+  signal(SIGWINCH, SigWinch);
+  cbreak();
+  noecho();
+  curs_set(0);
+  keypad(stdscr, 1);
+  refresh();
+  start_color();
+
+  init_pair(1, COLOR_BLACK, COLOR_WHITE);
+  init_pair(2, COLOR_WHITE, COLOR_BLACK);
+  init_pair(3, COLOR_BLACK, COLOR_BLUE);
+  init_pair(4, COLOR_BLACK, COLOR_CYAN);
+}
+
+/*  Initialize app structures and print launch app. */
+void InitializeApp(void)
+{
+  active_window.left = 0;
+  active_window.current_line = 0;
+  active_window.current_file = 0;
+  active_window.window = &right_fmwindow;
+ 
+  getcwd(left_fmwindow.active_path, PATH_LENGTH);
+  getcwd(right_fmwindow.active_path, PATH_LENGTH);
+
+  OpenActiveDir();
+  wrefresh(right_dir_window);
+
+  ChangeActiveWindow();  
+  OpenActiveDir();
+  wrefresh(left_dir_window);
+  ColorLine(HIGHLIGHTED_COLOR);
 }
 
 /*  Create ncurses windows and initialize FMWindows. */
@@ -107,32 +177,16 @@ void CreateWindows(void)
   wrefresh(menu_text_window);
 }
 
-void InitializeNcurses(void)
+void Finalize(void)
 {
-  initscr();
-  signal(SIGWINCH, SigWinch);
-  cbreak();
-  noecho();
-  curs_set(0);
-  keypad(stdscr, 1);
-  refresh();
-  start_color();
+  RemoveList(left_fmwindow.files);
+  RemoveList(right_fmwindow.files);
 
-  init_pair(1, COLOR_BLACK, COLOR_WHITE);
-  init_pair(2, COLOR_WHITE, COLOR_BLACK);
-}
-
-void PrintFileList(struct FMWindow *fmwindow)
-{
-  struct List *head = fmwindow->files->next;
-  int current_y = 0;
-
-  while (head) {
-    mvwprintw(fmwindow->nwindow, current_y, 0, "%s", head->file_name);
-    head = head->next;
-    ++current_y;
-  }
-  wrefresh(fmwindow->nwindow);
+  delwin(right_dir_window);
+  delwin(right_border_window);
+  delwin(left_dir_window);
+  delwin(left_border_window);
+  endwin();
 }
 
 /*  Just open the directory and print all files. */
@@ -187,42 +241,6 @@ void OpenActiveDir(void)
   }
 }
 
-void Finalize(void)
-{
-  RemoveList(left_fmwindow.files);
-  RemoveList(right_fmwindow.files);
-
-  delwin(right_dir_window);
-  delwin(right_border_window);
-  delwin(left_dir_window);
-  delwin(left_border_window);
-  endwin();
-}
-
-/*  Hightlight the file with number color_num. */
-void ColorLine(int color_num)
-{
-  char line[38];
-  int y = active_window.current_line;
-
-  mvwinnstr(active_window.window->nwindow, y, 0, line, 38);
-  wmove(active_window.window->nwindow, y, 0);
-  wclrtoeol(active_window.window->nwindow);
-  wattron(active_window.window->nwindow, COLOR_PAIR(color_num));
-  wprintw(active_window.window->nwindow, "%s", line);
-  wattroff(active_window.window->nwindow, COLOR_PAIR(color_num)); 
-  redrawwin(active_window.window->nwindow);
-}
-
-/*  Remove previous file highlighting and
- *  highlight current file. */
-void PickOutLine(int delta)
-{
-  ColorLine(2);
-  active_window.current_line += delta;
-  ColorLine(1);
-}
-
 /*  Change active window and highlight first file in directory. */
 void ChangeActiveWindow(void)
 {
@@ -259,51 +277,6 @@ void ChangeActiveWindow(void)
   redrawwin(active_window.window->nwindow);
 }
 
-/*  Initialize app structures and print launch app. */
-void InitializeApp(void)
-{
-  active_window.left = 0;
-  active_window.current_line = 0;
-  active_window.current_file = 0;
-  active_window.window = &right_fmwindow;
- 
-  getcwd(left_fmwindow.active_path, PATH_LENGTH);
-  getcwd(right_fmwindow.active_path, PATH_LENGTH);
-
-  OpenActiveDir();
-  wrefresh(right_dir_window);
-
-  ChangeActiveWindow();  
-  OpenActiveDir();
-  wrefresh(left_dir_window);
-  ColorLine(HIGHLIGHTED_COLOR);
-}
-
-/*  Return program to previous state that was
- *  before executing another program. */
-void GetPrevState(void)
-{
-  Finalize();
-  InitializeNcurses();
-  CreateWindows();
-  InitializeApp();
-  
-  wclear(stdscr);
-  box(left_border_window, 0, 0);
-  box(right_border_window, 0, 0);
-  wrefresh(left_border_window);
-  wrefresh(right_border_window);
-
-  PrintFileList(&left_fmwindow);
-  PrintFileList(&right_fmwindow);
-  wmove(left_dir_window, 2, 0);
-  curs_set(0);
-  redrawwin(stdscr);
-  redrawwin(left_border_window);
-  redrawwin(left_dir_window);
-  redrawwin(right_dir_window);
-}
-
 /*  If current file is directory then open the directory. Otherwise if
  *  file is marked as executable then execute it, else open file
  *  in text editor. */
@@ -313,19 +286,9 @@ void OpenFile(void)
   char path[PATH_LENGTH];
   char print_pattern[6];
   struct stat file_info;
-  int active_line = active_window.current_line;
-  int i;
   int is_dir;
 
-  mvwinnstr(active_window.window->nwindow, active_line, 0, line,
-            DIR_WINDOW_WIDTH);
-  for (i = 36; i > -1; --i) {
-    if (line[i] != ' ') {
-      line[i + 1] = '\0';
-      break;
-    }
-  }
-
+  ReadCurrentLine(line);
   is_dir = line[0] == '/';
   if (is_dir)
     sprintf(print_pattern, "%s", "%s%s");
@@ -383,6 +346,120 @@ void OpenFile(void)
   ColorLine(HIGHLIGHTED_COLOR); 
 }
 
+/*  If current file is not a dir, then copy it in neighboor tab. */
+void CopyFile(void)
+{
+  WINDOW *copy_main_window,
+         *copy_inside_window,
+         *copy_progress_bar_bkgd,
+         *copy_progress_bar_frgd,
+         *copy_text_window;
+  char file_name[100];
+
+  copy_main_window = newwin(6, 14, 10, 10);
+  copy_inside_window = derwin(copy_main_window, 4, 12, 1, 1);
+  copy_progress_bar_bkgd = derwin(copy_inside_window, 1, 10, 1, 1);
+  wbkgd(copy_progress_bar_bkgd, COLOR_PAIR(3));
+  copy_progress_bar_frgd = NULL;
+  wbkgd(copy_progress_bar_frgd, COLOR_PAIR(4));
+  copy_text_window = derwin(copy_inside_window, 1, 10, 2, 1);
+  box(copy_main_window, 0, 0);
+  wrefresh(copy_main_window);
+
+  wrefresh(copy_progress_bar_bkgd);
+  mvwprintw(copy_text_window, 0, 1, "Copying");
+  wrefresh(copy_text_window);
+
+  mvwinnstr(active_window.window->nwindow, active_window.current_line, 0,
+            file_name, DIR_WINDOW_WIDTH);
+
+  getch();
+  /*  Finalize. */
+  delwin(copy_text_window);
+  delwin(copy_progress_bar_bkgd);
+  delwin(copy_inside_window);
+  delwin(copy_main_window);
+
+  redrawwin(left_dir_window);
+}
+
+void PrintFileList(struct FMWindow *fmwindow)
+{
+  struct List *head = fmwindow->files->next;
+  int current_y = 0;
+
+  while (head) {
+    mvwprintw(fmwindow->nwindow, current_y, 0, "%s", head->file_name);
+    head = head->next;
+    ++current_y;
+  }
+  wrefresh(fmwindow->nwindow);
+}
+
+/*  Hightlight the file with number color_num. */
+void ColorLine(int color_num)
+{
+  char line[38];
+  int y = active_window.current_line;
+
+  mvwinnstr(active_window.window->nwindow, y, 0, line, 38);
+  wmove(active_window.window->nwindow, y, 0);
+  wclrtoeol(active_window.window->nwindow);
+  wattron(active_window.window->nwindow, COLOR_PAIR(color_num));
+  wprintw(active_window.window->nwindow, "%s", line);
+  wattroff(active_window.window->nwindow, COLOR_PAIR(color_num)); 
+  redrawwin(active_window.window->nwindow);
+}
+
+/*  Remove previous file highlighting and
+ *  highlight current file. */
+void PickOutLine(int delta)
+{
+  ColorLine(2);
+  active_window.current_line += delta;
+  ColorLine(1);
+}
+
+/*  Return program to previous state that was
+ *  before executing another program. */
+void GetPrevState(void)
+{
+  Finalize();
+  InitializeNcurses();
+  CreateWindows();
+  InitializeApp();
+  
+  wclear(stdscr);
+  box(left_border_window, 0, 0);
+  box(right_border_window, 0, 0);
+  wrefresh(left_border_window);
+  wrefresh(right_border_window);
+
+  PrintFileList(&left_fmwindow);
+  PrintFileList(&right_fmwindow);
+  wmove(left_dir_window, 2, 0);
+  curs_set(0);
+  redrawwin(stdscr);
+  redrawwin(left_border_window);
+  redrawwin(left_dir_window);
+  redrawwin(right_dir_window);
+}
+
+/*  Read current line from active window in file_name. */
+void ReadCurrentLine(char *file_name)
+{
+  int i;
+
+  mvwinnstr(active_window.window->nwindow, active_window.current_line, 0,
+            file_name, DIR_WINDOW_WIDTH);
+  for (i = 36; i > -1; --i) {
+    if (file_name[i] != ' ') {
+      file_name[i + 1] = '\0';
+      break;
+    }
+  }
+}
+
 /*  Scroll window by step. */
 void FmScroll(int step)
 {
@@ -416,33 +493,7 @@ void FmScroll(int step)
   ColorLine(1);
 }
 
-void CopyFile(void)
-{
-  WINDOW *copy_main_window,
-         *copy_inside_window,
-         *copy_progress_bar,
-         *copy_text_window;
-
-  copy_main_window = newwin(6, 14, 10, 10);
-  copy_inside_window = derwin(copy_main_window, 4, 12, 1, 1);
-  copy_progress_bar = derwin(copy_inside_window, 1, 10, 1, 1);
-  copy_text_window = derwin(copy_inside_window, 1, 10, 2, 1);
-  box(copy_main_window, 0, 0);
-  wrefresh(copy_main_window);
-
-  wattron(copy_progress_bar, COLOR_PAIR(3));
-  /*  10 space. */
-  wattroff(copy_progress_bar, COLOR_PAIR(3));
-  mvwprintw(copy_text_window, 0, 1, "Copying");
-
-  /*  Finalize. */
-  delwin(copy_text_window);
-  delwin(copy_progress_bar);
-  delwin(copy_inside_window);
-  delwin(copy_main_window);
-}
-
-void HandleKeyPress()
+void HandleKeyPress(void)
 {
   unsigned int symbol;
 
@@ -453,6 +504,7 @@ void HandleKeyPress()
     switch (symbol) {
       case KEY_F(2):
         CopyFile();
+
         break;
       case KEY_UP:
         if (active_window.current_line != 0) {
